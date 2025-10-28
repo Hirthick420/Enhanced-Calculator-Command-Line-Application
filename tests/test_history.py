@@ -90,7 +90,5 @@ def test_history_clear_empties_done_and_redo():
     h.undo()  # put one item on redo stack
     h.clear()
     assert h.is_empty() is True
-    # redo should now fail because clear() removed redo stack too
-    import pytest
     with pytest.raises(Exception):
         h.redo()
