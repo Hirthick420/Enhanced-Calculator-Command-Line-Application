@@ -92,3 +92,11 @@ def test_history_clear_empties_done_and_redo():
     assert h.is_empty() is True
     with pytest.raises(Exception):
         h.redo()
+
+def test_history_add_assigns_uuid_and_timestamp():
+    from app.history import History
+    from app.calculation import Calculation
+    h = History()
+    h.add(Calculation("add", 1, 1, 2))
+    item = h.items()[0]
+    assert item.uid is not None and item.timestamp is not None
