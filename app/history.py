@@ -1,9 +1,10 @@
 # app/history.py
 from __future__ import annotations
 from typing import List, Iterable
-from app.calculation import Calculation
-from app.calculator_memento import CalculatorMemento
-from app.exceptions import OperationError
+from .calculation import Calculation
+from .calculator_memento import CalculatorMemento
+from .exceptions import OperationError
+
 __all__ = ["History"]
 
 class History:

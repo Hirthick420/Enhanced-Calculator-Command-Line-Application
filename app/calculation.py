@@ -21,7 +21,7 @@ class Calculation:
         a=self.a,
         b=self.b,
         result=self.result,
-        timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
+        timestamp = datetime.now(UTC).isoformat(timespec="seconds")
 )
 
     def to_dict(self) -> Dict[str, Any]:
