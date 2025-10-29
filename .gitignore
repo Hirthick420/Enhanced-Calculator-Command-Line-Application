@@ -6,3 +6,5 @@ logs/
 data/
 .coverage
 htmlcov/
+local_logs/
+local_history/
