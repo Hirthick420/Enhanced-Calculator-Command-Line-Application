@@ -9,6 +9,7 @@ from app.calculator import Calculator
 from app.exceptions import OperationError
 from app.command_registry import command, register, get_commands, help_lines
 from app.command_pattern import CommandQueue, MathCommand
+from app.help_decorator import with_help, help_entries, register_help
 
 _QUEUE = CommandQueue()
 
@@ -47,23 +48,17 @@ def _should_color(stdout) -> bool:
         return False
 
 def _wrap_with(color_start: str, s: str, color_reset: str, raw_start: str) -> str:
-    """
-    Use provided color constants if set; otherwise fall back to raw ANSI escapes.
-    """
     start = color_start if color_start else raw_start
     reset = color_reset if color_reset else "\x1b[0m"
     return f"{start}{s}{reset}"
 
 def _color_ok(s: str) -> str:
-    # GREEN or raw \x1b[32m
     return _wrap_with(GREEN, s, RESET, "\x1b[32m")
 
 def _color_err(s: str) -> str:
-    # RED or raw \x1b[31m
     return _wrap_with(RED, s, RESET, "\x1b[31m")
 
 def _color_banner(s: str) -> str:
-    # CYAN or raw \x1b[36m
     return _wrap_with(CYAN, s, RESET, "\x1b[36m")
 # ------------------------------------------------
 
@@ -84,6 +79,7 @@ def _op(name: str) -> Handler:
     return handler
 
 # ---------------- Command Pattern: queue support ----------------
+@with_help("enqueue", "queue an operation: enqueue <op> <a> <b>")
 @command("enqueue", "queue an operation: enqueue <op> <a> <b>")
 def _enqueue(calc: Calculator, args: list[str]) -> str:
     if len(args) != 3:
@@ -96,11 +92,13 @@ def _enqueue(calc: Calculator, args: list[str]) -> str:
     _QUEUE.enqueue(cmd)
     return f"enqueued: {op} {float(a)} {float(b)}"
 
+@with_help("queue", "show queued commands")
 @command("queue", "show queued commands")
 def _queue_show(_calc: Calculator, _args: list[str]) -> str:
     items = _QUEUE.list()
     return "queue: empty" if not items else "\n".join(items)
 
+@with_help("runqueue", "run and clear the queued commands")
 @command("runqueue", "run and clear the queued commands")
 def _runqueue(calc: Calculator, _args: list[str]) -> str:
     results = _QUEUE.run_all(calc)
@@ -108,12 +106,14 @@ def _runqueue(calc: Calculator, _args: list[str]) -> str:
         return "queue: empty"
     return "\n".join(results)
 
+@with_help("clearqueue", "clear queued commands")
 @command("clearqueue", "clear queued commands")
 def _clearqueue(_calc: Calculator, _args: list[str]) -> str:
     n = _QUEUE.clear()
     return f"queue cleared ({n} item(s) removed)"
 # ---------------------------------------------------------------
 
+@with_help("history", "show history")
 @command("history", "show history")
 def _history(calc: Calculator, _args: list[str]) -> str:
     items = calc.history.items()
@@ -121,38 +121,63 @@ def _history(calc: Calculator, _args: list[str]) -> str:
         return "history: empty"
     return "\n".join(f"{c.operation}({c.a}, {c.b}) = {c.result} [{c.timestamp}]" for c in items)
 
+@with_help("clear", "clear history")
 @command("clear", "clear history")
 def _clear(calc: Calculator, _args: list[str]) -> str:
     calc.history.clear()
     return "history cleared"
 
+@with_help("undo", "undo last calculation")
 @command("undo", "undo last calculation")
 def _undo(calc: Calculator, _args: list[str]) -> str:
     c = calc.history.undo()
     return f"undo: {c.operation}({c.a}, {c.b})"
 
+@with_help("redo", "redo last undone calculation")
 @command("redo", "redo last undone calculation")
 def _redo(calc: Calculator, _args: list[str]) -> str:
     c = calc.history.redo()
     return f"redo: {c.operation}({c.a}, {c.b})"
 
+@with_help("save", "save history to CSV")
 @command("save", "save history to CSV")
 def _save(calc: Calculator, _args: list[str]) -> str:
     path = calc.history.save()
     return f"saved: {path}"
 
+@with_help("load", "load history from CSV")
 @command("load", "load history from CSV")
 def _load(calc: Calculator, _args: list[str]) -> str:
     n = calc.history.load()
     return f"loaded: {n} item(s)"
 
 @command("help", "show this help")
+@command("help", "show this help")
 def _help(_calc: Calculator, _args: list[str]) -> str:
+    """
+    Build help strictly from the LIVE registry to stay dynamic.
+    Any entries present only in help_lines() (e.g., 'dummy' from a decorator demo)
+    are filtered out unless they exist in the current registry.
+    """
+    live = set(get_commands().keys())
+    # keep only descriptions for commands that are actually live
+    filtered: list[tuple[str, str]] = [(n, d) for n, d in help_lines() if n in live]
+
+    # if a command is live but has no description, still show it with a placeholder
+    described = {n for n, _ in filtered}
+    for name in sorted(live):
+        if name not in described:
+            filtered.append((name, "no description"))
+
+    # stable sort by name
+    filtered.sort(key=lambda x: x[0])
+
     lines = ["Commands:"]
-    for name, desc in help_lines():
+    for name, desc in filtered:
         lines.append(f"  {name:<12} – {desc}")
     return "\n".join(lines)
 
+@with_help("exit", "exit the program")
 @command("exit", "exit the program")
 def _exit(_calc: Calculator, _args: list[str]) -> str:
     return "__EXIT__"
@@ -164,12 +189,14 @@ for _name, _desc in [
     ("modulus", "a % b"), ("int_divide", "a // b"), ("percent", "(a / b) * 100"),
     ("abs_diff", "|a - b|"),
 ]:
-    register(_name, _op(_name), _desc)
+    register_help(_name, _desc)          # Decorator registry
+    register(_name, _op(_name), _desc)   # Existing command registry
 
 def _seed_registry_if_needed() -> None:
     cmds = get_commands()
     if "help" in cmds:
         return
+    # re-register baseline commands
     register("history", _history, "show history")
     register("clear", _clear, "clear history")
     register("undo", _undo, "undo last calculation")
@@ -184,6 +211,7 @@ def _seed_registry_if_needed() -> None:
         ("modulus", "a % b"), ("int_divide", "a // b"), ("percent", "(a / b) * 100"),
         ("abs_diff", "|a - b|"),
     ]:
+        register_help(_name, _desc)
         register(_name, _op(_name), _desc)
 
 def process_line(calc: Calculator, line: str):
