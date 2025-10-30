@@ -8,24 +8,32 @@ from typing import Callable, Tuple
 from app.calculator import Calculator
 from app.exceptions import OperationError
 from app.command_registry import command, register, get_commands, help_lines
+from app.command_pattern import CommandQueue, MathCommand
+
+_QUEUE = CommandQueue()
 
 Number = float
 Handler = Callable[[Calculator, list[str]], str]
 
 # ---------------- Color support ----------------
-CYAN = GREEN = RED = RESET = ""  # set by _init_colors()
+CYAN = GREEN = RED = RESET = ""  # will be set by _init_colors()
 
-def _init_colors() -> None:  # pragma: no cover  (UI-only init; tests assert constants exist)
-    """Initialize color constants. Tests reload this module to exercise both paths."""
+def _init_colors() -> None:
+    """
+    Initialize color constants. If colorama is present, use it.
+    If not, keep the exported constants as empty strings (to satisfy tests),
+    and we'll inject raw ANSI escapes at print time in helpers.
+    """
     global CYAN, GREEN, RED, RESET
-    try:  # pragma: no cover
-        from colorama import Fore, Style, init as colorama_init  # pragma: no cover
-        colorama_init(autoreset=True)  # pragma: no cover
-        CYAN, GREEN, RED, RESET = Fore.CYAN, Fore.GREEN, Fore.RED, Style.RESET_ALL  # pragma: no cover
-    except Exception:  # pragma: no cover
-        CYAN = GREEN = RED = RESET = ""  # pragma: no cover
+    try:
+        from colorama import Fore, Style, init as colorama_init
+        colorama_init(autoreset=True)
+        CYAN, GREEN, RED, RESET = Fore.CYAN, Fore.GREEN, Fore.RED, Style.RESET_ALL
+    except Exception:
+        # Leave constants empty. Helpers will supply raw ANSI when needed.
+        CYAN = GREEN = RED = RESET = ""
 
-_init_colors()  # pragma: no cover  (exclude one-time module init from coverage)
+_init_colors()
 
 def _should_color(stdout) -> bool:
     mode = os.getenv("CALCULATOR_COLOR", "auto").lower()
@@ -38,14 +46,25 @@ def _should_color(stdout) -> bool:
     except Exception:
         return False
 
-def _color_ok(s: str) -> str:      # pragma: no cover  (pure UI helper)
-    return f"{GREEN}{s}{RESET}"
+def _wrap_with(color_start: str, s: str, color_reset: str, raw_start: str) -> str:
+    """
+    Use provided color constants if set; otherwise fall back to raw ANSI escapes.
+    """
+    start = color_start if color_start else raw_start
+    reset = color_reset if color_reset else "\x1b[0m"
+    return f"{start}{s}{reset}"
 
-def _color_err(s: str) -> str:     # pragma: no cover  (pure UI helper)
-    return f"{RED}{s}{RESET}"
+def _color_ok(s: str) -> str:
+    # GREEN or raw \x1b[32m
+    return _wrap_with(GREEN, s, RESET, "\x1b[32m")
 
-def _color_banner(s: str) -> str:  # pragma: no cover  (pure UI helper)
-    return f"{CYAN}{s}{RESET}"
+def _color_err(s: str) -> str:
+    # RED or raw \x1b[31m
+    return _wrap_with(RED, s, RESET, "\x1b[31m")
+
+def _color_banner(s: str) -> str:
+    # CYAN or raw \x1b[36m
+    return _wrap_with(CYAN, s, RESET, "\x1b[36m")
 # ------------------------------------------------
 
 def _parse_two(args: list[str]) -> Tuple[Number, Number]:
@@ -63,6 +82,37 @@ def _op(name: str) -> Handler:
         c = calc.execute(name, a, b)
         return f"{name}({a}, {b}) = {c.result}"
     return handler
+
+# ---------------- Command Pattern: queue support ----------------
+@command("enqueue", "queue an operation: enqueue <op> <a> <b>")
+def _enqueue(calc: Calculator, args: list[str]) -> str:
+    if len(args) != 3:
+        return "error: usage: enqueue <op> <a> <b>"
+    op, a, b = args[0], args[1], args[2]
+    try:
+        cmd = MathCommand(op, float(a), float(b))
+    except ValueError:
+        return "error: arguments must be numbers"
+    _QUEUE.enqueue(cmd)
+    return f"enqueued: {op} {float(a)} {float(b)}"
+
+@command("queue", "show queued commands")
+def _queue_show(_calc: Calculator, _args: list[str]) -> str:
+    items = _QUEUE.list()
+    return "queue: empty" if not items else "\n".join(items)
+
+@command("runqueue", "run and clear the queued commands")
+def _runqueue(calc: Calculator, _args: list[str]) -> str:
+    results = _QUEUE.run_all(calc)
+    if not results:
+        return "queue: empty"
+    return "\n".join(results)
+
+@command("clearqueue", "clear queued commands")
+def _clearqueue(_calc: Calculator, _args: list[str]) -> str:
+    n = _QUEUE.clear()
+    return f"queue cleared ({n} item(s) removed)"
+# ---------------------------------------------------------------
 
 @command("history", "show history")
 def _history(calc: Calculator, _args: list[str]) -> str:
@@ -148,7 +198,7 @@ def process_line(calc: Calculator, line: str):
         if not handler:
             return True, f"unknown command: {cmd}\nType 'help' to see commands."
         out = handler(calc, args)
-        if out == "__EXIT__":  # handled by the REPL loop
+        if out == "__EXIT__":
             return False, ""
         return True, out
     except OperationError as exc:
@@ -162,8 +212,7 @@ def run_loop(stdin = sys.stdin, stdout = sys.stdout) -> int:
     use_color = _should_color(stdout)
 
     banner = "Enhanced Calculator REPL. Type 'help' for commands. Type 'exit' to quit."
-    # Colored banner only in real TTY; tests validate plain text
-    print(_color_banner(banner) if use_color else banner, file=stdout)  # pragma: no cover
+    print(_color_banner(banner) if use_color else banner, file=stdout)
 
     while True:
         stdout.write("> ")
@@ -173,10 +222,10 @@ def run_loop(stdin = sys.stdin, stdout = sys.stdout) -> int:
             break
         cont, out = process_line(calc, line)
         if out:
-            if use_color and out.startswith("error:"):          # pragma: no cover
-                print(_color_err(out), file=stdout)             # pragma: no cover
-            elif use_color:                                     # pragma: no cover
-                print(_color_ok(out), file=stdout)              # pragma: no cover
+            if use_color and out.startswith("error:"):
+                print(_color_err(out), file=stdout)
+            elif use_color:
+                print(_color_ok(out), file=stdout)
             else:
                 print(out, file=stdout)
         if not cont:
